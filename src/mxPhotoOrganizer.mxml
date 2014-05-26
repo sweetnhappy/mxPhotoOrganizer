@@ -1,0 +1,1124 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Application Title: mxPhotoOrganizer
+	 Developer: Helmut Wollenberg
+	 Creation Date: Nov. 19, 2009
+	 Last Modified: Nov. 28, 2009
+	 Description: This is an Adobe AIR application that is designed to be a photo organizer.
+	 			  Users will import their photos from local disk(s) and use the application
+	 			  to categorize & group, sort, and add tags for simplified searching.
+	 			  The application's library will be maintained in an XML document in the
+	 			  application's storage directory.
+-->
+<mx:WindowedApplication xmlns:mx="http://www.adobe.com/2006/mxml"
+	showStatusBar="true" minHeight="740" minWidth="1000"
+	creationComplete="initApp();" closing="appCleanUp();">
+	
+	<mx:Style>
+		TabBar {
+			backgroundColor: #DDDDDD;
+        }
+        Tree {
+        	defaultLeafIcon: ClassReference(null);
+        	folderOpenIcon: ClassReference(null);
+        	folderClosedIcon: ClassReference(null);
+        	fontWeight: bold;
+        	fontSize: 12;
+        }
+        Alert {
+        	fontSize: 12;
+        }
+        ToolTip {
+        	fontSize: 11;
+        }
+        TitleWindow {
+        	paddingLeft: 10;
+        	backgroundAlpha: 1;
+        	borderAlpha: 1;
+        }
+	</mx:Style>
+	
+	<mx:Script>
+		<![CDATA[
+			import mx.containers.HBox;
+			import mx.containers.TitleWindow;
+			import mx.managers.*;
+			import mx.formatters.*;
+			import mx.events.*;
+			import mx.controls.*;
+			import mx.controls.listClasses.*;
+			import mx.collections.*;
+			import mx.core.*;
+			import hmw.*;
+			
+			private var appInitObj:AppInit;
+			private var appTasksObj:AppTasks;
+			private var appCleanupObj:AppCleanup;
+			
+			[Bindable]
+			private var masterXML:XML;
+			
+			[Bindable]
+			private var treeItemsXML:XML;
+			
+			[Bindable]
+			private var libItemsXML:XML;
+			
+			[Bindable]
+			private var importItemsXML:XML;
+			
+			private var groupedItemsXML:XML;
+			private var appPrefsXML:XML;
+			private var currentAlbumItemsXML:XML;
+			private var currentSearchItemsXML:XML;
+			
+			private var currentItem:Object;
+			private var treeItems:Array;
+			private var previousTab:int;
+			private var currentTab:int;
+			private var refreshSO:Boolean;
+			private var firstClickOnListItem:Boolean;
+			
+			private var libUniqueIDCounter:int;
+			private var albumUniqueIDCounter:int;
+			private var searchUniqueIDCounter:int;
+			private var isFirstRun:Boolean;
+			
+			private var newAlbumDialog:TitleWindow;
+			private var dialogInput:TextInput;
+			private var dialogComboBox:ComboBox;
+			private var addSelectedFromList:ListBase;
+			private var removeSelectedFromList:ListBase;
+			
+			[Bindable]
+			private var toolTipStrings:ArrayCollection;
+			
+			public function initApp():void {
+				nativeWindow.x = (Capabilities.screenResolutionX - nativeWindow.width) / 2;
+				nativeWindow.y = (Capabilities.screenResolutionY - nativeWindow.height) / 2;
+				
+				ToolTipManager.showDelay = 2000;
+				
+				addEventListener('addedToStage', initMenus);
+				
+				appInitObj = new AppInit(this);
+				appTasksObj = new AppTasks(this);
+				appCleanupObj = new AppCleanup(this);
+				
+				toolTipStrings = new ArrayCollection([
+								 "You will find your photos listed here.\nYou can sort them by clicking the column headings.\n" +
+								 "If you want to change the name or add keywords, just double click in the desired column of the photo.\n" +
+								 "The columns also can be resized for your convenience.\n\nTo select multiple files (for adding to albums) " +
+								 "use the Shift key or the Ctrl (Win/Linux) or Command (Mac) key.", /* 0 - List View Tab */
+								 "Here you can view thumbnails as well the full version of your photos.\n" +
+								 "Scroll the \"filmstrip\" on the bottom to naviate through your photos.", /* 1 - Filmstrip View Tab */
+								 "Here you can see the photos you selected to import (will be the contents of a folder, if you picked one).\n\n" +
+								 "Simply select a photo for the full version and the ability to change it's attributes that will be stored by this " +
+								 "application.\nYou can change the name, date, and keywords for any photos you want.\n\nTo complete the import " +
+								 "click either the Import All button or the Import Selected button (you can select multiple items by using the " +
+								 "Shift key or the Ctrl/Command key.\nIf you don't want to import anything, just click Cancel.", /* 2 - Import Photos Tab */
+								 "Here you can select to view albums (groups of photos), the main Library (all photos), or a search.", /* 3 - Library Tree */
+								 "To create a new album: click this button, enter a name and it'll be ready to use.", /* 4 - New Album Button */
+								 "To remove an album: select an album, then click this button, and confirm that you want to delete the album.", /* 5 - Remove Album Button */
+								 "Use this button to add the selected photos to an album.\n\n" +
+								 "You will be asked which album you'd like to add them to.", /* 6 - Add to Album Button */
+								 "Use this button to remove the selected photos from an album or, if you're in the Library, to remove the selected photos " +
+								 "from the application.\n\nRemoving photos from an album will not remove them from the Library.", /* 7 - Remove from Library/Album Button */
+								 "Click in this search box, type in something to search for, and hit Enter (or Return, on a Mac).\n" + 
+								 "You'll then be taken to the search results once they've been collected." /* 8 - Search Box */ ]);
+				
+				masterXML = appInitObj.loadLibrary();
+				separateMasterXML();
+				
+				checkFirstRun();
+				
+				firstClickOnListItem = false;
+				
+				currentItem = -1;
+				renderTreeNow();
+				
+				previousTab = tabBar.selectedIndex;
+				currentTab = tabBar.selectedIndex;
+			}
+			
+			public function getLibUIDCounter():int {
+				return libUniqueIDCounter;
+			}
+			
+			public function updateLibUIDCounter(counter:int):void {
+				libUniqueIDCounter = counter;
+			}
+			
+			public function saveLibraryNow():void {
+				this.status = "Saving library...";
+				mergeMasterXML();
+				appCleanupObj.saveLibrary(masterXML);
+				this.status = this.status + " Completed Successfully";
+			}
+			
+			public function loadExternalLib():void {
+				appTasksObj.loadExternalLib();
+			}
+			
+			public function saveExternalLib():void {
+				appTasksObj.saveExternalLib();
+			}
+			
+			public function setLibraryXML(loadedXML:XML):void {
+				masterXML = loadedXML;
+				separateMasterXML();
+				
+				renderTreeNow();
+				
+				this.status = this.status + " Completed Successfully";
+			}
+			
+			public function getLibXMLData():String {
+				this.status = "Exporting library...";
+				mergeMasterXML();
+				return appCleanupObj.stdXMLHeader + masterXML.toXMLString();
+			}
+			
+			public function appCleanUp():void {
+				mergeMasterXML();
+				appCleanupObj.cleanUp(masterXML);
+			}
+			
+			public function setupForImport():void {
+				toggleComponentsForImport(false);
+				
+				appTasksObj.requestImportSelection();
+				
+				previousTab = currentTab;
+				currentTab = 2;
+				tabBar.selectedIndex = currentTab;
+			}
+			
+			public function setImportXML(loadedPhotosXML:XML):void {
+				importItemsXML = loadedPhotosXML;
+			}
+			
+			public function dismissImport():void {
+				clearImportData();
+				
+				handleAlbumTreeItem();
+				
+				toggleComponentsForImport(true);
+				
+				importAll.enabled = false;
+				importSelected.enabled = false;
+				
+				tabBar.selectedIndex = previousTab;
+				currentTab = previousTab;
+			}
+			
+			public function updateImportItems():void {
+				importList.dataProvider = importItemsXML.node;
+				importList.validateNow();
+			}
+			
+			public function renderTreeFunc():void {
+				if (refreshSO) {
+					tree.invalidateList();
+					refreshSO = false;
+					
+					tree.expandChildrenOf(tree.dataProvider[0], true);
+					tree.validateNow();
+					tree.selectedIndex = 0;
+					currentItem = tree.selectedItem;
+				}
+			}
+			
+			private function renderTreeNow():void {
+				refreshSO = true;
+				renderTreeFunc();
+				
+				treeItems = appTasksObj.refreshTreeArray(treeItemsXML, tree);
+				tree.expandChildrenOf(tree.dataProvider[0], true);
+				tree.validateNow();
+				tree.selectedItem = currentItem;
+			}
+			
+			private function separateMasterXML():void {
+				treeItemsXML = new XML(masterXML.treeNodes.toXMLString());
+				libItemsXML = new XML(masterXML.libNodes.toXMLString());
+				groupedItemsXML = new XML(masterXML.groupNodes.toXMLString());
+				appPrefsXML = new XML(masterXML.prefs.toXMLString());
+				
+				getAppPrefs();
+			}
+			
+			private function mergeMasterXML():void {
+				setAppPrefs();
+				
+				masterXML = <appLib>
+				</appLib>;
+				masterXML.appendChild(treeItemsXML);
+				masterXML.appendChild(libItemsXML);
+				masterXML.appendChild(groupedItemsXML);
+				masterXML.appendChild(appPrefsXML);
+			}
+			
+			private function getAppPrefs():void {
+				libUniqueIDCounter = parseInt(appPrefsXML.prefSet[0].@lib);
+				albumUniqueIDCounter = parseInt(appPrefsXML.prefSet[0].@album);
+				searchUniqueIDCounter = parseInt(appPrefsXML.prefSet[0].@search);
+				if (appPrefsXML.prefSet[0].@firstRun == "true") {
+					isFirstRun = true;
+				}
+				else {
+					isFirstRun = false;
+				}
+			}
+			
+			private function setAppPrefs():void {
+				appPrefsXML.prefSet[0].@lib = libUniqueIDCounter.toString();
+				appPrefsXML.prefSet[0].@album = albumUniqueIDCounter.toString();
+				appPrefsXML.prefSet[0].@search = searchUniqueIDCounter.toString();
+				if (isFirstRun) {
+					appPrefsXML.prefSet[0].@firstRun = "true";
+				}
+				else {
+					appPrefsXML.prefSet[0].@firstRun = "false";
+				}
+			}
+			
+			private function checkFirstRun():void {
+				if (isFirstRun) {
+					Alert.show("Welcome to the mxPhotoOrganizer!\n\nThis application allows you to import your photos, then sort, " +
+						"group (into albums), and search those photos.\n\nNo need to worry about file duplication or relocation " +
+						"because this application only indexes your photos and this saves disk space!\n\nIf you get stuck and don't " +
+						"know what to do, just move your mouse over something in the app and a Tool Tip should appear after a few " +
+						"seconds to help you out (click to dismiss).\n\nAlso, if it appears nothing is happening, check the " +
+						"status bar at the bottom of the window for updates.\n\nThat's it.  Now you can get to importing those photos.",
+						"First Run - Welcome Message", Alert.OK, this);
+					isFirstRun = false;
+				}
+			}
+			
+			private function clearStatusBar():void {
+				this.status = "";
+			}
+			
+			private function initMenus(event:Event):void {
+				removeEventListener('addedToStage', initMenus);
+				var fileMenu:NativeMenuItem;
+				
+				if (NativeWindow.supportsMenu) {
+					stage.nativeWindow.menu = new NativeMenu();
+					fileMenu = stage.nativeWindow.menu.addItem(new NativeMenuItem("File"));
+					fileMenu.submenu = appInitObj.createFileMenuWin();
+					adjustWindowDimensions();
+				}
+				
+				if (NativeApplication.supportsMenu) {
+					var rootMenu:NativeMenu = NativeApplication.nativeApplication.menu;
+					fileMenu = rootMenu.getItemAt(1);
+					fileMenu.submenu = appInitObj.updateFileMenuMac(fileMenu.submenu);
+				}
+			}
+			
+			private function adjustWindowDimensions():void {
+				this.minWidth = 1010;
+				this.minHeight = 750;
+			}
+			
+			private function tree_itemClick(event:ListEvent):void {
+				clearStatusBar();
+				
+				var item:Object = event.currentTarget.selectedItem;
+				var nonSelectable:Boolean = ((item.hasOwnProperty("@clickable")) && (item.(@clickable == "false")));
+				
+				if (nonSelectable) {
+					tree.selectedItem = currentItem;
+				}
+				else {
+					currentItem = tree.selectedItem;
+					
+					if ((currentTab == 0) || (currentTab == 1)) {
+						updateViewItems(item.@uID);
+					}
+					
+					handleAlbumTreeItem();
+					clearBlankFilmstripView();
+				}
+			}
+			
+			private function handleAlbumTreeItem():void {
+				if ((parseInt(tree.selectedItem.@uID) > 0) && (parseInt(tree.selectedItem.@uID) < 10000)) {
+					removeFromAnyButton.label = "Remove from  Album";
+					removeFromAnyButton.enabled = false;
+					addToAlbumButton.enabled = false;
+					removeAlbumButton.enabled = true;
+				}
+				/* Not Saving Searches
+				else if (parseInt(tree.selectedItem.@uID) > 10000) {
+					//removeSearchButton.enabled = true; // Not Saving Searches
+				}*/
+				else {
+					removeFromAnyButton.label = "Remove from Library";
+					removeFromAnyButton.enabled = false;
+					addToAlbumButton.enabled = false;
+					removeAlbumButton.enabled = false;
+					//removeSearchButton.enabled = false; // Not Saving Searches
+				}
+			}
+			
+			private function tabBar_itemClick(event:ItemClickEvent):void {
+				clearStatusBar();
+				
+				if (event.label == "List View") {
+					if (filmstripList.selectedIndex != -1) {
+						listViewDG.selectedIndex = filmstripList.selectedIndex;
+					}
+					
+					newAlbumButton.enabled = true;
+					
+					previousTab = currentTab;
+					currentTab = 0;
+					tabBar.selectedIndex = currentTab;
+				}
+				if (event.label == "Filmstrip View") {
+					if (listViewDG.selectedIndices.length > 0) {
+						filmstripList.selectedIndex = listViewDG.selectedIndices[0];
+						filmstripList.validateNow();
+						filmstripViewPanel.title = filmstripList.selectedItem.@name;
+						fullViewImg.source = filmstripList.selectedItem.@source;
+					}
+					else {
+						filmstripList.selectedIndex = -1;
+						filmstripList.validateNow();
+						filmstripViewPanel.title = " ";
+						fullViewImg.source = null;
+					}
+					
+					newAlbumButton.enabled = true;
+					
+					previousTab = currentTab;
+					currentTab = 1;
+					tabBar.selectedIndex = currentTab;
+				}
+				if (event.label == "Import Photos") {
+					setupForImport();
+				}
+			}
+			
+			private function toggleComponentsForImport(bool:Boolean):void {
+				ListTab.enabled = bool;
+				FilmstripTab.enabled = bool;
+				searchBox.enabled = bool;
+				treeBox.enabled = bool;
+				newAlbumButton.enabled = bool;
+				removeAlbumButton.enabled = false;
+			}
+			
+			private function doImport(importAll:Boolean):void {
+				if (importAll) {
+					for each (var node:XML in importItemsXML.node) {
+						libItemsXML.appendChild(node);
+					}
+				}
+				else {
+					for each (var item:XML in importList.selectedItems) {
+						libItemsXML.appendChild(item);
+					}
+				}
+				
+				dismissImport();
+			}
+			
+			private function cancelImport():void {
+				this.status = "Photo Import Cancelled";
+				dismissImport();
+			}
+			
+			private function clearImportData():void {
+				importItemsXML = null;
+				importFullViewImg.source = null;
+				
+				importList.invalidateList();
+				importList.dataProvider = importItemsXML;
+				importList.validateNow();
+				
+				importImgName.text = "";
+				importImgDate.text = "";
+				importImgSize.text = "";
+				importImgPath.text = "";
+				importImgKeywords.text = "";
+			}
+			
+			private function importListChange(event:ListEvent):void {
+				var array:Array = event.target.selectedItems;
+				
+				if (array.length == 1) {
+					importFullViewImg.source = array[0].@source;
+					importImgName.text = array[0].@name;
+					importImgDate.text = array[0].@date;
+					importImgSize.text = array[0].@size;
+					importImgPath.text = array[0].@source;
+					importImgKeywords.text = array[0].@keywords;
+					
+					importImgName.editable = true;
+					importImgDate.editable = true;
+					importImgKeywords.editable = true;
+					importSelected.enabled = true;
+				}
+				else {
+					if (array.length == 0) {
+						importFullViewImg.source = null;
+						
+						importImgName.editable = false;
+						importImgDate.editable = false;
+						importImgKeywords.editable = false;
+						importSelected.enabled = false;
+					}
+					else {
+						importFullViewImg.source = "MultipleSelection.jpg";
+						
+						importImgName.editable = false;
+						importImgDate.editable = false;
+						importImgKeywords.editable = false;
+						importSelected.enabled = true;
+					}
+					importImgName.text = "";
+					importImgDate.text = "";
+					importImgSize.text = "";
+					importImgPath.text = "";
+					importImgKeywords.text = "";
+				}
+			}
+			
+			private function updateImportFields():void {
+				if (importList.selectedItems.length == 1) {
+					importList.selectedItem.@name = importImgName.text;
+					importList.selectedItem.@date = importImgDate.text;
+					importList.selectedItem.@keywords = importImgKeywords.text;
+				}
+			}
+			
+			private function filmstripChange(event:ListEvent):void {
+				var obj:Object;
+				if (event == null) {
+					obj = null;
+				}
+				else {
+					obj = event.target.selectedItem;
+				}
+				
+				if (obj == null) {
+					filmstripViewPanel.title = " ";
+					fullViewImg.source = null;
+					filmstripNoneSelectedHandler();
+				}
+				else {
+					filmstripViewPanel.title = obj.@name;
+					fullViewImg.source = obj.@source;
+					filmstripItemSelectedHandler();
+				}
+				clearBlankFilmstripView();
+			}
+			
+			private function clearBlankFilmstripView():void {
+				if (filmstripList.selectedIndex < 0) {
+					filmstripViewPanel.title = " ";
+					fullViewImg.source = null;
+				}
+			}
+			
+			private function updateViewItems(uID:String):void {
+				updateAList(uID, listViewDG);
+				updateAList(uID, filmstripList);
+			}
+			
+			private function updateAList(uID:String, theList:ListBase):void {
+				if (uID == "-1") {
+					theList.invalidateList();
+					theList.dataProvider = libItemsXML.node;
+					theList.validateNow();
+				}
+				else {
+					var uIDInt:int = parseInt(uID);
+					if ((uIDInt > 0) && (uIDInt < 1000)) {
+						currentAlbumItemsXML = setTheItemsXML(uID, currentAlbumItemsXML);
+						theList.invalidateList();
+						theList.dataProvider = currentAlbumItemsXML.node;
+						theList.validateNow();
+					}
+					else if (uIDInt == 10000) {
+						theList.invalidateList();
+						theList.dataProvider = currentSearchItemsXML.node;
+						theList.validateNow();
+					}
+					else {
+						Alert.show("Something went wrong with the updating the views, sorry.");
+					}
+				}
+			}
+			
+			private function setTheItemsXML(selecteduID:String, theXMLObj:XML):XML {
+				theXMLObj = <albumnodes>
+				</albumnodes>;
+				var albumItemsList:XMLList = groupedItemsXML.node.(@uID == selecteduID);
+				var albumItemsString:String = albumItemsList.@images;
+				var albumItemsArray:Array = albumItemsString.split(",");
+				for each (var s:String in albumItemsArray) {
+					theXMLObj.appendChild(libItemsXML.node.(@uID == s));
+				}
+				return theXMLObj;
+			}
+			
+			private function checkEmptySearch(wantsToSearch:Boolean):void {
+				clearStatusBar();
+				if (searchBox.text == "") {
+					searchBox.text="Search Library...";
+				}
+				else {
+					if (wantsToSearch) {
+						performSearch();
+					}
+				}
+			}
+			
+			private function performSearch():void {
+				tabBar.selectedIndex = 0;
+				var searchArray:Array = searchBox.text.split(" ").join().split(",");
+				
+				currentSearchItemsXML = <searchResults>
+				</searchResults>;
+				
+				for each (var x:XML in libItemsXML.node) {
+					var keywordsArray:Array = x.@keywords.split(" ").join().split(",");
+					for (var i:int = 0; i < searchArray.length; i++) {
+						for (var j:int = 0; j < keywordsArray.length; j++) {
+							if (keywordsArray[j].toString().search(searchArray[i]) > -1) {
+								currentSearchItemsXML.appendChild(x);
+							}
+						}
+					}
+				}
+				
+				tree.selectedIndex = treeItemsXML.descendants().length() - 1;
+				
+				updateViewItems(tree.selectedItem.@uID);
+			}
+			
+			private function isSecondClick(event:Event):void {
+				if (! firstClickOnListItem) {
+					firstClickOnListItem = true;
+					event.stopImmediatePropagation();
+					listViewDG.editedItemPosition = null;
+				}
+			}
+			
+			private function resetItemClickBool():void {
+				checkSelectionOfList();
+				firstClickOnListItem = false;
+			}
+			
+			private function createNewAlbum():void {
+				clearStatusBar();
+				
+				var dialogButtonHBox:HBox = new HBox();
+				var dialogText:Label = new Label();
+				var dialogOKButton:Button = new Button();
+				var dialogCancelButton:Button = new Button();
+				dialogInput = new TextInput();
+				newAlbumDialog = new TitleWindow();
+				
+				dialogText.text = "Choose a name for your new album:";
+				dialogOKButton.label = "OK";
+				dialogOKButton.addEventListener(MouseEvent.CLICK, addTheAlbum);
+				dialogCancelButton.label = "Cancel";
+				dialogCancelButton.addEventListener(MouseEvent.CLICK, closeAlbumDialog);
+				dialogButtonHBox.addChild(dialogOKButton);
+				dialogButtonHBox.addChild(dialogCancelButton);
+				
+				newAlbumDialog.title = "New Album...";
+				newAlbumDialog.width = 300;
+				newAlbumDialog.height = 125;
+				newAlbumDialog.alpha = 1;
+				newAlbumDialog.showCloseButton = true;
+				newAlbumDialog.addEventListener(CloseEvent.CLOSE, closeAlbumDialog);
+				newAlbumDialog.addEventListener(KeyboardEvent.KEY_UP, triedToEscAlbumDialog);
+				newAlbumDialog.addChild(dialogText);
+				newAlbumDialog.addChild(dialogInput);
+				newAlbumDialog.addChild(dialogButtonHBox);
+				newAlbumDialog.defaultButton = dialogOKButton;
+				
+				PopUpManager.addPopUp(newAlbumDialog, this, false);
+				PopUpManager.centerPopUp(newAlbumDialog);
+				
+				dialogInput.setFocus();
+			}
+			
+			private function addTheAlbum(event:Event):void {
+				if (dialogInput.text.length == 0) {
+					newAlbumDialog.dispatchEvent(new CloseEvent(CloseEvent.CLOSE));
+					this.status = "Could not create album with no name.";
+				}
+				else {
+					var newAlbumNode:String = "<node label=\"" + dialogInput.text + "\" uID=\"" + albumUniqueIDCounter + "\" />";
+					treeItemsXML.node[1].appendChild(new XML(newAlbumNode));
+					
+					var newGroupAlbumNode:String = "<node uID=\"" +  albumUniqueIDCounter + "\" images=\"\" />";
+					groupedItemsXML.appendChild(new XML(newGroupAlbumNode));
+					
+					newAlbumDialog.dispatchEvent(new CloseEvent(CloseEvent.CLOSE));
+					
+					renderTreeNow();
+					
+					albumUniqueIDCounter++;
+					this.status = "Created new album: " + dialogInput.text;
+				}
+			}
+			
+			private function closeAlbumDialog(event:Event):void {
+				PopUpManager.removePopUp(newAlbumDialog);
+			}
+			
+			private function triedToEscAlbumDialog(event:KeyboardEvent):void {
+				if (event.keyCode == Keyboard.ESCAPE) {
+					PopUpManager.removePopUp(newAlbumDialog);
+				}
+			}
+			
+			private function removeSelectedAlbum():void {
+				clearStatusBar();
+				
+				Alert.show("Are you sure you want to delete\nthe " + tree.selectedItem.@label + " album?", "Confirm Delete",
+					(Alert.YES | Alert.NO), this, confirmRemoveAlbum, null, (Alert.NO));
+			}
+			
+			private function confirmRemoveAlbum(event:CloseEvent):void {
+				if (event.detail == Alert.YES) {
+					var albumToDelete:XMLList = treeItemsXML.node[1].node.(@uID == tree.selectedItem.@uID);
+					var albumGroupToDelete:XMLList = groupedItemsXML.node.(@uID == tree.selectedItem.@uID);
+					var albumToDeleteName:String = albumToDelete.@label;
+					
+					var treeXMLList:XMLList = new XMLList(albumToDelete.parent()).children();
+					for (var i:int = 0; i < treeXMLList.length(); i++) {
+						if (treeXMLList[i] == albumToDelete) {
+							delete treeXMLList[i];
+						}
+					}
+					
+					var groupedItemsXML:XMLList = new XMLList(albumGroupToDelete.parent()).children();
+					for (var j:int = 0; j < groupedItemsXML.length(); j++) {
+						if (groupedItemsXML[j] == albumGroupToDelete) {
+							delete groupedItemsXML[j];
+						}
+					}
+					
+					tree.selectedIndex = 0;
+					updateViewItems("-1");
+					this.status = "Removed album: " + albumToDeleteName;
+					removeAlbumButton.enabled = false;
+				}
+				else {
+					this.status = "Canceled Album Removal";
+				}
+			}
+			
+			private function checkSelectionOfList():void {
+				if (parseInt(tree.selectedItem.@uID) < 1000) {
+					if (listViewDG.selectedItems.length > 0) {
+						addToAlbumButton.enabled = true;
+						if ((listViewDG.selectedItems.length == 1) || (removeFromAnyButton.label == "Remove from  Album")) {
+							removeFromAnyButton.enabled = true;
+						}
+						else {
+							removeFromAnyButton.enabled = false;
+						}
+					}
+					else {
+						addToAlbumButton.enabled = false;
+						removeFromAnyButton.enabled = false;
+					}
+				}
+			}
+			
+			private function filmstripItemSelectedHandler():void {
+				if (parseInt(tree.selectedItem.@uID) < 1000) {
+					addToAlbumButton.enabled = true;
+					removeFromAnyButton.enabled = true;
+				}
+			}
+			
+			private function filmstripNoneSelectedHandler():void {
+				if (parseInt(tree.selectedItem.@uID) < 1000) {
+					addToAlbumButton.enabled = false;
+					removeFromAnyButton.enabled = false;
+				}
+			}
+			
+			private function addSelectedToAlbum():void {
+				if (tabBar.selectedIndex == 0) {
+					addSelectedFromList = listViewDG;
+					addSelected();
+				}
+				else if (tabBar.selectedIndex == 1) {
+					addSelectedFromList = filmstripList;
+					addSelected();
+				}
+			}
+			
+			private function getAvailableAlbums():ArrayCollection {
+				var albumsInTree:XMLList = treeItemsXML.node[1].node;
+				var albumsArray:ArrayCollection = new ArrayCollection();
+				
+				if (albumsInTree.length() == 0) {
+					return null;
+				}
+				else {
+					//
+					for each (var x:XML in albumsInTree) {
+						var theLabel:String = x.@label;
+						var theData:int = x.@uID;
+						var tempArray:Object = {label:theLabel, data:theData};
+						albumsArray.addItem(tempArray);
+					}
+					
+					return albumsArray;
+				}
+			}
+			
+			private function addSelected():void {
+				clearStatusBar();
+				
+				var albumsAvailable:ArrayCollection = getAvailableAlbums();
+				
+				if (albumsAvailable == null) {
+					PopUpManager.removePopUp(newAlbumDialog);
+					Alert.show("There are no albums.\nCreate a new album then try again.", "No Albums");
+				}
+				else {
+					var dialogButtonHBox:HBox = new HBox();
+					var dialogText:Label = new Label();
+					var dialogOKButton:Button = new Button();
+					var dialogCancelButton:Button = new Button();
+					dialogComboBox = new ComboBox();
+					newAlbumDialog = new TitleWindow();
+					
+					dialogText.text = "Choose the album to add your selection to:";
+					dialogComboBox.dataProvider = albumsAvailable;
+					dialogComboBox.editable = false;
+					dialogOKButton.label = "OK";
+					dialogOKButton.addEventListener(MouseEvent.CLICK, addTheSelected);
+					dialogCancelButton.label = "Cancel";
+					dialogCancelButton.addEventListener(MouseEvent.CLICK, closeAddToAlbumDialog);
+					dialogButtonHBox.addChild(dialogOKButton);
+					dialogButtonHBox.addChild(dialogCancelButton);
+					
+					newAlbumDialog.title = "Add to Album...";
+					newAlbumDialog.width = 300;
+					newAlbumDialog.height = 125;
+					newAlbumDialog.alpha = 1;
+					newAlbumDialog.showCloseButton = true;
+					newAlbumDialog.addEventListener(CloseEvent.CLOSE, closeAddToAlbumDialog);
+					newAlbumDialog.addEventListener(KeyboardEvent.KEY_UP, triedToEscAddToAlbumDialog);
+					newAlbumDialog.addChild(dialogText);
+					newAlbumDialog.addChild(dialogComboBox);
+					newAlbumDialog.addChild(dialogButtonHBox);
+					newAlbumDialog.defaultButton = dialogOKButton;
+					
+					PopUpManager.addPopUp(newAlbumDialog, this, false);
+					PopUpManager.centerPopUp(newAlbumDialog);
+					
+					dialogComboBox.setFocus();
+				}
+			}
+			
+			private function addTheSelected(event:Event):void {
+				var albumXML:XMLList = groupedItemsXML.node.(@uID == dialogComboBox.selectedItem.data.toString());
+				var albumItems:Array = albumXML.@images.toString().split(",");
+				var itemsToAdd:Array = new Array();
+				for each (var x:XML in addSelectedFromList.selectedItems) {
+					itemsToAdd.push(x.@uID);
+				}
+				
+				var doNotAddRepeat:Boolean = false;
+				for each (var a:String in itemsToAdd) {
+					for each (var c:String in albumItems) {
+						if (a == c) {
+							doNotAddRepeat = true;
+						}
+					}
+					if (! doNotAddRepeat) {
+						albumItems.push(a);
+						doNotAddRepeat = false;
+					}
+				}
+				
+				if (albumItems.length == 1) {
+					groupedItemsXML.node.(@uID == dialogComboBox.selectedItem.data.toString()).@images = albumItems;
+				}
+				else {
+					groupedItemsXML.node.(@uID == dialogComboBox.selectedItem.data.toString()).@images = albumItems.join();
+				}
+				
+				newAlbumDialog.dispatchEvent(new CloseEvent(CloseEvent.CLOSE));
+				this.status = "Added selected items to album: " + dialogComboBox.selectedLabel;
+			}
+			
+			private function retryAddSelected(event:CloseEvent):void {
+				if (event.detail == Alert.NO) {
+					newAlbumDialog.dispatchEvent(new CloseEvent(CloseEvent.CLOSE));
+					this.status = "Canceled add to album";
+				}
+			}
+			
+			private function closeAddToAlbumDialog(event:Event):void {
+				PopUpManager.removePopUp(newAlbumDialog);
+			}
+			
+			private function triedToEscAddToAlbumDialog(event:KeyboardEvent):void {
+				if (event.keyCode == Keyboard.ESCAPE) {
+					PopUpManager.removePopUp(newAlbumDialog);
+				}
+			}
+			
+			private function removeSelectedFromAny():void {
+				if (tabBar.selectedIndex == 0) {
+					removeSelectedFromList = listViewDG;
+					removeSelected();
+				}
+				else if (tabBar.selectedIndex == 1) {
+					removeSelectedFromList = filmstripList;
+					removeSelected();
+				}
+			}
+			
+			private function removeSelected():void {
+				clearStatusBar();
+				
+				Alert.show("Are you sure you want to remove the selected files?\n\nNote they will still exist on your computer because " +
+					"this program only maintains an index of the imported images.", "Confirm Remove", (Alert.YES | Alert.NO),
+					this, confirmRemoveSelected, null, (Alert.NO));
+			}
+			
+			private function confirmRemoveSelected(event:CloseEvent):void {
+				if (event.detail == Alert.YES) {
+					if (tree.selectedItem.@uID == "-1") {
+						var itemsToDelete:XMLListCollection = new XMLListCollection();
+						
+						for each (var item:Object in removeSelectedFromList.selectedItems) {
+							itemsToDelete.addItem(libItemsXML.node.(@uID == item.@uID));
+						}
+						
+						var itemsToDeleteList:XMLList = itemsToDelete.source;
+						for (var j:int = 0; j < itemsToDeleteList.length(); j++) {
+							for (var i:int = 0; i < libItemsXML.node.length(); i++) {
+								if (libItemsXML.node[i] == itemsToDeleteList[j]) {
+									delete libItemsXML.node[i];
+								}
+							}
+						}
+						
+						updateViewItems(tree.selectedItem.@uID);
+					}
+					else {
+						var albumXML:XMLList = groupedItemsXML.node.(@uID == tree.selectedItem.@uID);
+						var albumItems:ArrayCollection = new ArrayCollection(albumXML.@images.toString().split(","))
+						var itemsToDeleteFromAlbum:Array = new Array();
+						for each (var x:XML in removeSelectedFromList.selectedItems) {
+							itemsToDeleteFromAlbum.push(x.@uID);
+						}
+						
+						for each (var d:String in itemsToDeleteFromAlbum) {
+							for each (var c:String in albumItems) {
+								if (d == c) {
+									albumItems.removeItemAt(albumItems.getItemIndex(d));
+								}
+							}
+						}
+						
+						if (albumItems.length == 0) {
+							groupedItemsXML.node.(@uID == tree.selectedItem.@uID).@images = "";
+						}
+						else if (albumItems.length == 1) {
+							groupedItemsXML.node.(@uID == tree.selectedItem.@uID).@images = albumItems.toArray();
+						}
+						else {
+							groupedItemsXML.node.(@uID == tree.selectedItem.@uID).@images = albumItems.toArray().join();
+						}
+						
+						currentAlbumItemsXML = setTheItemsXML(tree.selectedItem.@uID, currentAlbumItemsXML);
+						updateViewItems(tree.selectedItem.@uID);
+					}
+					
+					if (currentTab == 0) {
+						resetItemClickBool();
+					}
+					else if (currentTab == 1) {
+						filmstripChange(null);
+					}
+					
+					listViewDG.invalidateList();
+					listViewDG.selectedIndex = -1;
+					listViewDG.validateNow();
+					filmstripList.invalidateList();
+					filmstripList.selectedIndex = -1;
+					filmstripList.validateNow();
+					
+					addToAlbumButton.enabled = false;
+					removeFromAnyButton.enabled = false;
+					
+					updateViewItems(tree.selectedItem.@uID);
+					
+					if (tree.selectedItem.@uID == "-1") {
+						this.status = "Removed items from library";
+					}
+					else {
+						this.status = "Removed items from album";
+					}
+				}
+				else {
+					this.status = "Canceled Item Removal";
+				}
+			}
+		]]>
+	</mx:Script>
+	
+	<mx:HDividedBox width="100%" height="100%">
+		<mx:VBox width="100%" height="100%" minWidth="251" minHeight="660" maxWidth="251">
+			<mx:HBox>
+				<mx:Button label="New Album..." id="newAlbumButton" enabled="true" click="createNewAlbum();"
+					toolTip="{toolTipStrings.getItemAt(4)}" />
+				<mx:Box width="100%" minWidth="20" />
+				<mx:Button label="Remove Album" id="removeAlbumButton" enabled="false" click="removeSelectedAlbum();"
+					toolTip="{toolTipStrings.getItemAt(5)}" />
+			</mx:HBox>
+			<!-- Not Saving Searches -->
+			<!--<mx:Box height="1" />
+			<mx:HBox>
+				<mx:Button label="Save Search..." id="saveSearchButton" enabled="false" click=""
+					toolTip="{toolTipStrings.getItemAt(6)}" />
+				<mx:Box width="100%" minWidth="12" />
+				<mx:Button label="Remove Search" id="removeSearchButton" enabled="false" click=""
+					toolTip="{toolTipStrings.getItemAt(7)}" />
+			</mx:HBox>-->
+			<mx:Box height="8" />
+			<mx:Box id="treeBox" backgroundColor="white" borderStyle="outset" width="100%" height="100%"
+				label="Tree Box" verticalAlign="middle" horizontalAlign="center" minWidth="251" minHeight="580" maxWidth="251">
+				<mx:Tree id="tree" dataProvider="{treeItemsXML}" labelField="@label" showRoot="false" width="100%" height="100%"
+					useRollOver="false" backgroundColor="#D6DDE5" selectionColor="#3366CC" textSelectedColor="white"
+					itemClick="tree_itemClick(event);" render="renderTreeFunc();" verticalScrollPolicy="auto" toolTip="{toolTipStrings.getItemAt(3)}" />
+			</mx:Box>
+		</mx:VBox>
+		
+		<mx:VBox width="100%" height="100%" minWidth="690" minHeight="646" verticalGap="0" verticalScrollPolicy="off">
+			<mx:HBox>
+				<mx:Box width="100%" minWidth="60" />
+				<mx:Button label="Add to Album..." id="addToAlbumButton" enabled="false" click="addSelectedToAlbum();"
+					toolTip="{toolTipStrings.getItemAt(6)}" />
+				<mx:Box width="100%" minWidth="60" />
+				<mx:Button label="Remove from Library" id="removeFromAnyButton" enabled="false" click="removeSelectedFromAny();"
+					toolTip="{toolTipStrings.getItemAt(7)}" />
+				<mx:Box width="100%" minWidth="65" />
+				<mx:TextInput id="searchBox" width="200" enter="checkEmptySearch(true);" focusOut="checkEmptySearch(false);"
+					text="Search Library..." focusIn="searchBox.text='';" toolTip="{toolTipStrings.getItemAt(8)}" />
+			</mx:HBox>
+			<mx:Box height="20" />
+			<mx:Box width="100%" height="100%" minWidth="690" minHeight="632" verticalGap="0">
+				<mx:TabBar id="tabBar" tabWidth="150" dataProvider="{viewStack}" itemClick="tabBar_itemClick(event);"
+					toolTip="These are the views available to you.  Import Photos will start a new import session." />
+				
+				<mx:ViewStack id="viewStack" creationPolicy="all" width="100%" height="100%">
+					<mx:Box id="ListTab" backgroundColor="white" borderStyle="outset" width="100%" height="100%"
+						label="List View" verticalAlign="middle" horizontalAlign="center" minWidth="690" minHeight="592"
+						horizontalGap="0" verticalGap="0">
+						<mx:HDividedBox width="100%" height="100%">
+							<mx:DataGrid id="listViewDG" width="100%" height="100%" dataProvider="{libItemsXML.node}" useRollOver="false"
+								allowMultipleSelection="true" alternatingItemColors="[#FFFFFF, #E7EFFF]" verticalScrollPolicy="auto"
+								editable="true" horizontalScrollPolicy="auto" toolTip="{toolTipStrings.getItemAt(0)}"
+								itemEditBeginning="isSecondClick(event);" change="resetItemClickBool();">
+								<mx:columns>
+									<mx:DataGridColumn dataField="@name" headerText="Name" editable="true" minWidth="150" />
+									<mx:DataGridColumn dataField="@keywords" headerText="Keywords" editable="true" minWidth="200" />
+									<mx:DataGridColumn dataField="@date" headerText="Date" editable="false" minWidth="125" />
+									<mx:DataGridColumn dataField="@size" headerText="File Size" editable="false" />
+									<mx:DataGridColumn dataField="@source" headerText="Path" editable="false" minWidth="500" />
+								</mx:columns>
+							</mx:DataGrid>
+						</mx:HDividedBox>
+					</mx:Box>
+					<mx:Box id="FilmstripTab" backgroundColor="white" borderStyle="outset" width="100%" height="100%"
+						label="Filmstrip View" verticalAlign="middle" horizontalAlign="center" minWidth="690" minHeight="592"
+						horizontalGap="0" verticalGap="0">
+						<mx:Panel id="filmstripViewPanel" width="100%" height="100%" fontSize="14" fontWeight="bold" textAlign="center"
+							backgroundAlpha="0" title=" " toolTip="{toolTipStrings.getItemAt(1)}">
+							<mx:VDividedBox width="100%" height="100%">
+								<mx:Image id="fullViewImg" scaleContent="true" horizontalCenter="0" verticalCenter="0" maintainAspectRatio="true"
+									width="100%" height="100%" completeEffect="Fade" horizontalAlign="center" />
+								<mx:HBox horizontalGap="0" width="100%">
+									<mx:VBox verticalGap="0" minWidth="430" width="100%" horizontalAlign="left" paddingLeft="5">
+										<mx:Label id="filmstripKeywords" text="Keywords:  {filmstripList.selectedItem.@keywords}" fontSize="9" fontWeight="normal" 
+											truncateToFit="true" minWidth="425" width="100%" textAlign="left" />
+										<mx:Label id="filmstripSource" text="Source:       {filmstripList.selectedItem.@source}" fontSize="9" fontWeight="normal"
+											truncateToFit="true" minWidth="425" width="100%" textAlign="left" />
+									</mx:VBox>
+									<mx:VBox verticalGap="0" minWidth="230" width="100%" horizontalAlign="left" paddingLeft="5">
+										<mx:Text id="filmstripDate" text="Date:        {filmstripList.selectedItem.@date}" fontSize="9" fontWeight="normal"
+											width="100%" textAlign="left" />
+										<mx:Text id="filmstripSize" text="File Size:  {filmstripList.selectedItem.@size}"
+											fontSize="9" fontWeight="normal" width="100%" textAlign="left" />
+									</mx:VBox>
+								</mx:HBox>
+							</mx:VDividedBox>
+							<mx:ControlBar horizontalAlign="center" width="100%" autoLayout="true">
+								<mx:HorizontalList id="filmstripList" dataProvider="{libItemsXML.node}" labelField="lbl" iconField="src"
+									itemRenderer="CustomItemRenderer" columnCount="6" columnWidth="110" rowHeight="100" horizontalScrollPolicy="on"
+									useRollOver="false" backgroundColor="black" fontWeight="bold" color="white" selectionColor="#3366CC"
+									change="filmstripChange(event);" fontSize="11" width="100%" />
+							</mx:ControlBar>
+						</mx:Panel>
+					</mx:Box>
+					<mx:Box id="ImportTab" backgroundColor="white" borderStyle="outset" width="100%" height="100%"
+						label="Import Photos" verticalAlign="middle" horizontalAlign="center" minWidth="680" minHeight="582"
+						horizontalGap="0" verticalGap="0">
+						<mx:Panel id="importPanel" headerHeight="8" width="100%" height="100%" fontSize="14" fontWeight="bold" textAlign="center"
+						backgroundAlpha="0" title="" verticalGap="0" toolTip="{toolTipStrings.getItemAt(2)}">
+							<mx:HBox width="100%" height="100%">
+								<mx:Box width="50%" height="100%" paddingTop="10" paddingLeft="10">
+									<mx:Image id="importFullViewImg" scaleContent="true" horizontalCenter="0" verticalCenter="0" maintainAspectRatio="true"
+										width="100%" height="100%" completeEffect="Fade" verticalAlign="middle" horizontalAlign="center" />
+								</mx:Box>
+								<mx:VBox width="50%" height="100%" paddingTop="10" paddingLeft="10" paddingRight="10"
+									horizontalAlign="center" verticalAlign="top">
+									<mx:Text textAlign="left" text="Name" />
+									<mx:TextInput id="importImgName" textAlign="left" text="{importList.selectedItem.@name}"
+										width="100%" editable="true" keyUp="updateImportFields();" />
+									<mx:Text textAlign="left" text="Date" />
+									<mx:TextInput id="importImgDate" textAlign="left" text="{importList.selectedItem.@date}"
+										width="100%" editable="true" keyUp="updateImportFields();" />
+									<mx:Text textAlign="left" text="File Size" />
+									<mx:TextInput id="importImgSize" textAlign="left" text="{importList.selectedItem.@size}"
+										width="100%" editable="false" />
+									<mx:Text textAlign="left" text="Path" />
+									<mx:TextInput id="importImgPath" textAlign="left" text="{importList.selectedItem.@source}"
+										width="100%" editable="false" />
+									<mx:Text textAlign="left" text="Keywords" />
+									<mx:TextArea id="importImgKeywords" textAlign="left" text="{importList.selectedItem.@keywords}"
+										width="100%" editable="true" keyUp="updateImportFields();" />
+								</mx:VBox>
+							</mx:HBox>
+							<mx:ControlBar horizontalAlign="center" width="100%" autoLayout="true">
+								<mx:HorizontalList id="importList" labelField="lbl" iconField="src" change="importListChange(event);"
+									itemRenderer="CustomItemRenderer" columnCount="6" columnWidth="110" rowHeight="100" horizontalScrollPolicy="on"
+									useRollOver="false" backgroundColor="black" fontWeight="bold" color="white" selectionColor="#3366CC"
+									fontSize="11" width="100%" allowMultipleSelection="true" />
+							</mx:ControlBar>
+							<mx:HBox width="100%" paddingBottom="10" paddingRight="10" horizontalAlign="right" horizontalGap="10">
+								<mx:Button label="Import Selected" fontSize="14" fontWeight="bold" width="150" height="40" emphasized="true"
+									id="importSelected" enabled="false" click="doImport(false);" />
+								<mx:Button label="Import All" fontSize="14" fontWeight="bold" width="110" height="40" emphasized="true"
+									id="importAll" enabled="false" click="doImport(true);" />
+								<mx:Button label="Cancel" fontSize="14" fontWeight="bold" width="100" height="40" click="cancelImport();" />
+							</mx:HBox>
+						</mx:Panel>
+					</mx:Box>
+				</mx:ViewStack>
+			</mx:Box>
+		</mx:VBox>
+	</mx:HDividedBox>
+	
+</mx:WindowedApplication>

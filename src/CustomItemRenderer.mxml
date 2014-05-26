@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- http://blog.flexexamples.com/2008/03/08/creating-a-simple-image-gallery-with-the-flex-tilelist-control/ -->
+<mx:VBox xmlns:mx="http://www.adobe.com/2006/mxml" horizontalAlign="center" verticalAlign="middle" verticalGap="0">
+	<mx:Image source="{data.@source}" maxWidth="90" maxHeight="70" scaleContent="true"
+		maintainAspectRatio="true" horizontalAlign="center" verticalAlign="middle" />
+	
+	<mx:Label text="{data.@name}" truncateToFit="true" maxWidth="90" />
+</mx:VBox>
